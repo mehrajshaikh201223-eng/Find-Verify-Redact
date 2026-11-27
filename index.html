@@ -1,0 +1,2387 @@
+<!DOCTYPE html>
+<html lang="en" class="dark scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Blackline — Client-Side PII Sanitization & Redaction Engine</title>
+  
+  <!-- Typography: Space Grotesk, Poppins & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Space Grotesk"', '"Poppins"', 'system-ui', 'sans-serif'],
+            poppins: ['"Poppins"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+          colors: {
+            zinc: {
+              950: '#09090b',
+              900: '#121215',
+              850: '#18181c',
+              800: '#27272a',
+              750: '#303036',
+              700: '#3f3f46',
+            }
+          },
+          animation: {
+            'pulse-subtle': 'pulseSubtle 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'scanline': 'scanline 4.5s linear infinite',
+            'fade-in': 'fadeIn 0.6s ease-out',
+          },
+          keyframes: {
+            pulseSubtle: {
+              '0%, 100%': { opacity: '1' },
+              '50%': { opacity: '0.4' },
+            },
+            scanline: {
+              '0%': { transform: 'translateY(-100%)' },
+              '100%': { transform: 'translateY(1200%)' },
+            },
+            fadeIn: {
+              'from': { opacity: '0', transform: 'translateY(8px)' },
+              'to': { opacity: '1', transform: 'translateY(0)' },
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* Safe-area insets & global base */
+    :root {
+      color-scheme: dark;
+
+      /* ─── ACCENT COLOR SYSTEM ─────────────────────────────────────────────
+         All UI accent colors derive from these three variables.
+         Changing them via JS instantly re-themes the entire dashboard.
+      ─────────────────────────────────────────────────────────────────────── */
+      --accent-500:   #10b981;   /* emerald-500  – primary accent */
+      --accent-400:   #34d399;   /* emerald-400  – highlights / active glows */
+      --accent-300:   #6ee7b7;   /* emerald-300  – text on dark */
+      --accent-200:   #a7f3d0;   /* emerald-200  – very light tint */
+      --accent-950bg: rgba(16,185,129,0.08);  /* tinted backgrounds */
+      --accent-glow:  rgba(16,185,129,0.30);  /* shadow / glow */
+      --accent-border:rgba(16,185,129,0.50);  /* border tint */
+    }
+    body {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      background-color: #09090b;
+      color: #f4f4f5;
+      overflow-x: hidden;
+      font-family: 'Space Grotesk', 'Poppins', sans-serif;
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #121215;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+
+    /* Focus visible keyboard rings */
+    *:focus-visible {
+      outline: 2px solid #10b981 !important;
+      outline-offset: 2px !important;
+    }
+
+    /* SaaS Glow cards tracking pointer */
+    .glow-card {
+      position: relative;
+      background: rgba(18, 18, 21, 0.75);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 1rem;
+      overflow: hidden;
+      transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+    }
+    .glow-card::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      background: radial-gradient(400px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.08), transparent 70%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 1;
+    }
+    .glow-card:hover::before {
+      opacity: 1;
+    }
+
+    /* SaaS Telemetry & Workspace Card Enhancements */
+    .saas-stat-card {
+      position: relative;
+      background: linear-gradient(180deg, rgba(24, 24, 28, 0.88) 0%, rgba(14, 14, 17, 0.96) 100%);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.6), inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .saas-stat-card:hover {
+      border-color: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 16px 36px -6px rgba(0, 0, 0, 0.75), inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
+    }
+
+    /* Gradient Typography from SaaS template */
+    .saas-text-gradient {
+      background: linear-gradient(180deg, #ffffff 0%, #ffffff 65%, rgba(255, 255, 255, 0.55) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.05em;
+    }
+
+    /* Parallax faint grid */
+    .parallax-bg {
+      background-size: 32px 32px;
+      background-image: 
+        linear-gradient(to right, rgba(39, 39, 42, 0.22) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(39, 39, 42, 0.22) 1px, transparent 1px);
+    }
+
+    /* Custom fine pointer */
+    @media (pointer: fine) {
+      body.custom-cursor-active, 
+      body.custom-cursor-active * {
+        cursor: default !important;
+      }
+      body.custom-cursor-active a,
+      body.custom-cursor-active button,
+      body.custom-cursor-active label,
+      body.custom-cursor-active summary,
+      body.custom-cursor-active input[type="radio"],
+      body.custom-cursor-active .cursor-pointer {
+        cursor: pointer !important;
+      }
+      body.custom-cursor-active textarea,
+      body.custom-cursor-active .cursor-text {
+        cursor: text !important;
+      }
+    }
+
+    /* High-tech scan line animation overlay */
+    .scan-beam {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent 0%, rgba(16, 185, 129, 0.2) 20%, rgba(16, 185, 129, 0.8) 50%, rgba(16, 185, 129, 0.2) 80%, transparent 100%);
+      box-shadow: 0 0 14px rgba(16, 185, 129, 0.5);
+      pointer-events: none;
+      z-index: 10;
+      opacity: 0.8;
+    }
+
+    /* Segmented Mode Button Styling */
+    .mode-btn {
+      border: 1px solid transparent;
+      transition: all 0.2s ease-in-out;
+    }
+    .mode-btn:hover {
+      background-color: rgba(39, 39, 42, 0.7);
+    }
+    .mode-btn-active {
+      background: linear-gradient(180deg, #27272a 0%, #18181b 100%) !important;
+      color: var(--accent-400) !important;
+      border-color: var(--accent-border) !important;
+      font-weight: 700 !important;
+      box-shadow: 0 0 12px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+    }
+    .mode-pill {
+      transition: all 0.15s ease-in-out;
+    }
+    .mode-pill-active {
+      background-color: var(--accent-500) !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      box-shadow: 0 0 8px var(--accent-glow) !important;
+    }
+
+    /* ─── Accent-aware utility classes (driven by CSS vars) ─────────────── */
+    .accent-text        { color: var(--accent-400) !important; }
+    .accent-text-light  { color: var(--accent-300) !important; }
+    .accent-border      { border-color: var(--accent-border) !important; }
+    .accent-bg          { background-color: var(--accent-950bg) !important; }
+    .accent-glow-shadow { box-shadow: 0 0 10px var(--accent-glow) !important; }
+    .accent-pulse       { background-color: var(--accent-400) !important; }
+    /* Stat-card top beam */
+    .stat-beam          { background: linear-gradient(90deg, transparent, var(--accent-400), transparent) !important; }
+    /* Color Picker Panel */
+    #accent-panel {
+      position: fixed;
+      top: 60px;
+      right: 16px;
+      z-index: 9999;
+      background: #18181b;
+      border: 1px solid #3f3f46;
+      border-radius: 14px;
+      padding: 16px;
+      width: 272px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
+      display: none;
+      animation: panelIn 0.18s cubic-bezier(0.16,1,0.3,1);
+    }
+    #accent-panel.open { display: block; }
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+    .color-swatch {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .color-swatch:hover { transform: scale(1.18); }
+    .color-swatch.active {
+      border-color: #fff !important;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.3), 0 0 12px var(--accent-glow);
+    }
+    .color-swatch.active::after {
+      content: '';
+      position: absolute;
+      inset: 4px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.8);
+    }
+    #custom-accent-input {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 32px; height: 32px;
+      padding: 0; border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      background: none;
+    }
+    #custom-accent-input::-webkit-color-swatch-wrapper { padding: 0; }
+    #custom-accent-input::-webkit-color-swatch { border-radius: 8px; border: 2px solid #52525b; }
+
+    /* Motion reduced overrides */
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+      #cursor-dot, #cursor-ring, #pointer-spotlight, .scan-beam {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-100 font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
+
+  <!-- Top 3px Scroll Progress Bar -->
+  <div id="scroll-progress-bar" class="fixed top-0 left-0 h-[3px] w-0 bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500 z-50 transition-[width] duration-75"></div>
+
+  <!-- Ambient Cursor Spotlight Overlay (pointer: fine) -->
+  <div id="pointer-spotlight" class="fixed inset-0 pointer-events-none z-30 opacity-0 transition-opacity duration-300" style="background: radial-gradient(650px circle at var(--spot-x, 50vw) var(--spot-y, 50vh), rgba(16, 185, 129, 0.05), transparent 80%);"></div>
+
+  <!-- Custom Cursor Dot & Lagging Ring -->
+  <div id="cursor-dot" class="fixed top-0 left-0 w-2 h-2 bg-emerald-400 rounded-full pointer-events-none z-50 -translate-x-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-200"></div>
+  <div id="cursor-ring" class="fixed top-0 left-0 w-8 h-8 border border-emerald-400/50 rounded-full pointer-events-none z-50 -translate-x-1/2 -translate-y-1/2 opacity-0 transition-[transform,width,height,border-color,background-color] duration-150 ease-out"></div>
+
+  <!-- Global Toast Notification Banner -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 max-w-md bg-zinc-900 border border-zinc-700/80 text-zinc-100 px-4 py-3 rounded-lg shadow-2xl flex items-center gap-3 translate-y-16 opacity-0 pointer-events-none transition-all duration-300">
+    <div id="toast-icon" class="text-emerald-400 shrink-0">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+    </div>
+    <div id="toast-message" class="text-sm font-sans font-medium">Notification message</div>
+  </div>
+
+  <!-- Parallax Background Container -->
+  <div id="parallax-container" class="relative w-full parallax-bg">
+
+    <!-- 1. TOP CONTROL BAR (SaaS Header Aesthetic) -->
+    <header class="relative md:sticky md:top-0 z-40 w-full border-b border-gray-800/60 bg-black/80 backdrop-blur-md transition-all">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          
+          <!-- App Logo & Security Status Pill -->
+          <div class="flex items-center gap-3">
+            <span class="bg-white text-black font-bold font-mono tracking-tight text-sm uppercase px-3 py-1 rounded-md shadow-sm hover:scale-105 active:scale-95 transition-transform select-none">
+              Blackline
+            </span>
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-700 bg-gray-800/50 backdrop-blur-sm text-xs text-zinc-300 font-mono">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="hidden sm:inline">100% Client-Side · Zero-Network</span>
+              <span class="sm:hidden">Zero-Network</span>
+            </div>
+          </div>
+
+          <!-- Quick Actions & File Controls -->
+          <div class="flex items-center flex-wrap gap-2.5">
+
+            <!-- 🎨 Accent Color Picker Button -->
+            <button id="btn-accent-picker" type="button" title="Change accent color" aria-label="Change accent color" class="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-zinc-700/80 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white text-xs font-mono transition-all cursor-pointer group">
+              <span id="accent-preview-dot" class="w-3.5 h-3.5 rounded-full ring-1 ring-white/20 transition-all" style="background-color: var(--accent-400);"></span>
+              <span class="hidden sm:inline">Theme</span>
+              <svg class="w-3 h-3 text-zinc-500 group-hover:text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <!-- Load Sample Data Button -->
+            <button id="btn-load-sample" type="button" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-mono text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 px-3 py-1.5 bg-gray-800 text-white hover:bg-gray-700 border border-gray-700/80 active:scale-95">
+              <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              <span>Load sample data</span>
+            </button>
+
+            <!-- Upload File Picker -->
+            <label for="file-upload-input" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-mono text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 px-3 py-1.5 bg-gray-800 text-white hover:bg-gray-700 border border-gray-700/80 cursor-pointer active:scale-95">
+              <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              <span id="file-upload-label">Upload .txt / .csv</span>
+              <input id="file-upload-input" type="file" accept=".txt,.csv,text/plain,text/csv" class="sr-only">
+            </label>
+          </div>
+
+          <!-- Mode Segmented Control & Export CTA -->
+          <div class="flex items-center flex-wrap gap-3 w-full lg:w-auto justify-between lg:justify-end">
+            <!-- Explicit High-Feedback Segmented Control for Redaction Modes -->
+            <div id="redaction-mode-group" class="flex items-center p-1 rounded-lg bg-black/80 border border-gray-700/80 text-xs font-mono select-none shadow-inner" role="radiogroup" aria-label="Redaction Mode Selection">
+              
+              <!-- Full Mask Button -->
+              <button id="btn-mode-full" type="button" data-mode="full" role="radio" aria-checked="true" class="mode-btn mode-btn-active relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-all cursor-pointer">
+                <input type="radio" id="radio-mode-full" name="redaction-mode" value="full" checked class="sr-only">
+                <span>Full Mask</span>
+              </button>
+
+              <!-- Partial Mask Button -->
+              <button id="btn-mode-partial" type="button" data-mode="partial" role="radio" aria-checked="false" class="mode-btn relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono text-zinc-400 hover:text-white hover:bg-zinc-850/60 transition-all cursor-pointer">
+                <input type="radio" id="radio-mode-partial" name="redaction-mode" value="partial" class="sr-only">
+                <span>Partial Mask</span>
+              </button>
+
+              <!-- Pseudonymize Button -->
+              <button id="btn-mode-pseudonymize" type="button" data-mode="pseudonymize" role="radio" aria-checked="false" class="mode-btn relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono text-zinc-400 hover:text-white hover:bg-zinc-850/60 transition-all cursor-pointer">
+                <input type="radio" id="radio-mode-pseudonymize" name="redaction-mode" value="pseudonymize" class="sr-only">
+                <span>Pseudonymize</span>
+                <span id="pseudo-counter-badge" class="px-1.5 py-0.2 rounded text-[10px] font-mono bg-zinc-700/80 text-zinc-200 font-bold border border-zinc-600/50">0</span>
+              </button>
+            </div>
+
+            <!-- Export Sanitized Button (SaaS Gradient Style) -->
+            <button id="btn-export" type="button" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-mono text-xs font-semibold px-4 py-2 bg-gradient-to-b from-amber-400 via-amber-400/95 to-amber-500 text-zinc-950 shadow-md hover:scale-105 active:scale-95 transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <span>Export sanitized</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </header>
+
+    <!-- 2. CYBER-MATRIX HERO SECTION (SaaS Aesthetic) -->
+    <section class="relative min-h-[460px] lg:min-h-[500px] flex flex-col items-center justify-center overflow-hidden border-b border-gray-800/60">
+      <!-- Matrix Interactive Canvas Background -->
+      <canvas id="cyber-matrix-canvas" class="absolute inset-0 w-full h-full pointer-events-auto z-0 opacity-70"></canvas>
+      <div class="absolute inset-0 bg-gradient-to-b from-zinc-950/40 via-zinc-950/70 to-zinc-950 pointer-events-none z-10"></div>
+
+      <!-- Hero Typography & Direct Workspace Callout -->
+      <div class="relative z-20 max-w-4xl mx-auto px-4 py-16 sm:py-20 text-center animate-fade-in">
+        
+        <!-- Top Announcement Pill from SaaS template -->
+        <aside class="mb-6 inline-flex flex-wrap items-center justify-center gap-2 px-4 py-2 rounded-full border border-gray-700 bg-gray-800/50 backdrop-blur-sm max-w-full">
+          <span class="text-xs text-center whitespace-nowrap text-gray-400">
+            Enterprise Client-Side Redaction Engine
+          </span>
+          <a href="#workspace" class="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-all active:scale-95 whitespace-nowrap">
+            Explore engine
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-7-7l7 7-7 7"/></svg>
+          </a>
+        </aside>
+
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-medium tracking-tight text-center leading-tight mb-6 saas-text-gradient">
+          Find it. Verify it. <br class="hidden sm:inline" />Redact it.
+        </h1>
+
+        <p class="text-sm md:text-base text-center max-w-2xl mx-auto mb-10 text-gray-400 leading-relaxed font-sans">
+          Enterprise-grade in-browser PII detection with mathematical Luhn card verification, non-destructive masking, and zero telemetry egress.
+        </p>
+
+        <div class="flex items-center justify-center gap-4 relative z-10 mb-6">
+          <a href="#workspace" class="inline-flex items-center justify-center gap-2 rounded-lg px-7 py-3 text-sm font-semibold bg-gradient-to-b from-white via-white/95 to-white/70 text-black hover:scale-105 active:scale-95 transition-all shadow-xl shadow-white/5">
+            <span>Get started in workspace</span>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+          </a>
+          <button id="hero-btn-sample" type="button" class="inline-flex items-center justify-center gap-2 rounded-lg px-6 py-3 text-sm font-medium bg-gray-800 text-white hover:bg-gray-700 border border-gray-700/80 transition-all active:scale-95">
+            Load incident sample
+          </button>
+        </div>
+
+        <!-- Mini Cyber Badge Row -->
+        <div class="mt-8 flex flex-wrap items-center justify-center gap-5 text-[11px] font-mono text-zinc-500">
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+            <span>Credit Cards (Luhn Mod-10)</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+            <span>Indian Aadhaar (UIDAI)</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-fuchsia-500"></span>
+            <span>Indian PAN</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+            <span>Emails (RFC 5322)</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-violet-500"></span>
+            <span>IPv4 / IPv6</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+            <span>Phone Numbers</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. TELEMETRY ROW (8 CARDS - SAAS TEMPLATE UI) -->
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3.5">
+        
+        <!-- 1. Credit Cards (Luhn Verified) - Rose -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-rose-500/50 to-transparent group-hover:via-rose-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              Credit Cards
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50"></span>
+          </div>
+
+          <div id="stat-cc" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-rose-400 bg-rose-950/40 border border-rose-500/30 px-1.5 py-0.5 rounded">
+              Luhn Verified
+            </span>
+          </div>
+        </div>
+
+        <!-- 2. Indian Aadhaar - Orange -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-orange-500/50 to-transparent group-hover:via-orange-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              Aadhaar
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-orange-500 shadow-sm shadow-orange-500/50"></span>
+          </div>
+
+          <div id="stat-aadhaar" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-orange-400 bg-orange-950/40 border border-orange-500/30 px-1.5 py-0.5 rounded">
+              12-Digit UIDAI
+            </span>
+          </div>
+        </div>
+
+        <!-- 3. Indian PAN - Fuchsia -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-fuchsia-500/50 to-transparent group-hover:via-fuchsia-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              PAN Cards
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-fuchsia-500 shadow-sm shadow-fuchsia-500/50"></span>
+          </div>
+
+          <div id="stat-pan" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-fuchsia-400 bg-fuchsia-950/40 border border-fuchsia-500/30 px-1.5 py-0.5 rounded">
+              IT Alphanumeric
+            </span>
+          </div>
+        </div>
+
+        <!-- 4. Emails - Sky -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-sky-500/50 to-transparent group-hover:via-sky-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              Emails
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-sky-500 shadow-sm shadow-sky-500/50"></span>
+          </div>
+
+          <div id="stat-email" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-sky-400 bg-sky-950/40 border border-sky-500/30 px-1.5 py-0.5 rounded">
+              RFC Compliant
+            </span>
+          </div>
+        </div>
+
+        <!-- 5. IP Addresses - Violet -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-violet-500/50 to-transparent group-hover:via-violet-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              IP Addresses
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-violet-500 shadow-sm shadow-violet-500/50"></span>
+          </div>
+
+          <div id="stat-ip" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-violet-400 bg-violet-950/40 border border-violet-500/30 px-1.5 py-0.5 rounded">
+              IPv4 &amp; IPv6
+            </span>
+          </div>
+        </div>
+
+        <!-- 6. Phones - Amber -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-amber-500/50 to-transparent group-hover:via-amber-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              Phones
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-sm shadow-amber-500/50"></span>
+          </div>
+
+          <div id="stat-phone" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-amber-400 bg-amber-950/40 border border-amber-500/30 px-1.5 py-0.5 rounded">
+              Natl &amp; Intl
+            </span>
+          </div>
+        </div>
+
+        <!-- 7. Total Redacted - Emerald -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent group-hover:via-emerald-500 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors truncate">
+              Total Redacted
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50"></span>
+          </div>
+
+          <div id="stat-total" class="text-3xl font-mono font-bold saas-text-gradient my-1">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+              Active Targets
+            </span>
+          </div>
+        </div>
+
+        <!-- 8. Blocked (Failed Luhn) - Rose Glass Border / Danger Metric -->
+        <div class="saas-stat-card glow-card rounded-xl p-3.5 flex flex-col justify-between group border-rose-500/30 bg-rose-950/10">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-rose-500 to-transparent group-hover:via-rose-400 transition-all duration-300"></div>
+          
+          <div class="flex items-center justify-between gap-1 mb-2">
+            <span class="text-[11px] font-mono font-medium text-rose-300 group-hover:text-rose-100 transition-colors truncate">
+              Blocked (Luhn)
+            </span>
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shadow-sm shadow-rose-500/80"></span>
+          </div>
+
+          <div id="stat-blocked" class="text-3xl font-mono font-bold text-rose-400 my-1" style="letter-spacing: -0.05em;">
+            0
+          </div>
+
+          <div class="mt-2 pt-2 border-t border-rose-500/20 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-rose-300 bg-rose-950/60 border border-rose-500/40 px-1.5 py-0.5 rounded font-semibold">
+              Failed Mod-10
+            </span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 4. REDESIGNED SAAS DUAL-STREAM WORKSPACE SECTION (#workspace) -->
+    <section id="workspace" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      
+      <!-- Section Header -->
+      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+        <div>
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-800 bg-gray-900/80 backdrop-blur-sm text-xs font-mono text-zinc-300 mb-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Live Redaction Workspace
+          </div>
+          <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-white saas-text-gradient">
+            Dual-Stream In-Memory Engine
+          </h2>
+        </div>
+        <div class="flex items-center gap-3 text-xs font-mono text-zinc-400">
+          <span class="inline-flex items-center gap-1.5 bg-zinc-900/70 border border-zinc-800/80 px-2.5 py-1 rounded-md">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            Zero Telemetry Egress
+          </span>
+          <span class="inline-flex items-center gap-1.5 bg-zinc-900/70 border border-zinc-800/80 px-2.5 py-1 rounded-md">
+            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+            Non-Destructive Slicing
+          </span>
+        </div>
+      </div>
+
+      <!-- Split Workspace Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+        
+        <!-- LEFT CARD: RAW INPUT (SaaS Frosted Glass Chassis) -->
+        <div id="raw-card" class="saas-stat-card glow-card flex flex-col min-h-[580px] rounded-2xl border border-white/10 group transition-all duration-300 relative overflow-hidden">
+          <!-- Ambient Top Glow Beam -->
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-400/40 to-transparent group-hover:via-emerald-400 transition-all duration-300"></div>
+
+          <!-- Card Header Bar -->
+          <div class="flex items-center justify-between px-5 py-3.5 border-b border-white/5 bg-black/40 backdrop-blur-md">
+            <div class="flex items-center gap-2.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50"></span>
+              <span class="text-sm font-mono font-semibold text-white tracking-tight">Raw input</span>
+              <span id="raw-meta-info" class="text-xs font-mono text-zinc-400 bg-zinc-800/70 border border-zinc-700/60 px-2.5 py-0.5 rounded-full">
+                0 chars · 0 lines
+              </span>
+            </div>
+
+            <!-- Header Action Controls -->
+            <div class="flex items-center gap-2">
+              <!-- Highlighted Preview Segmented Switch -->
+              <button id="btn-toggle-preview" type="button" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-xs font-mono text-zinc-200 transition-all border border-zinc-700/80 active:scale-95 shadow-sm cursor-pointer" aria-pressed="false">
+                <span class="w-2 h-2 rounded-full bg-zinc-500 transition-colors" id="preview-toggle-indicator"></span>
+                <span>Highlighted preview: <strong id="preview-toggle-text" class="text-zinc-400 font-normal">off</strong></span>
+              </button>
+
+              <!-- Clear Input Button -->
+              <button id="btn-clear-raw" type="button" class="p-2 rounded-lg text-zinc-400 hover:text-rose-400 hover:bg-rose-950/30 hover:border-rose-500/30 border border-transparent transition-all cursor-pointer" title="Clear input">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Card Body: Editable Textarea or Color-Coded Read-Only View -->
+          <div class="relative flex-1 p-5 flex flex-col">
+            <!-- Dropzone Visual Cue Overlay (active on dragover) -->
+            <div id="dropzone-overlay" class="absolute inset-0 bg-emerald-950/90 backdrop-blur-md border-2 border-dashed border-emerald-400 rounded-b-2xl flex flex-col items-center justify-center gap-3 text-emerald-300 font-mono text-sm pointer-events-none opacity-0 transition-opacity z-20">
+              <div class="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center border border-emerald-400/40">
+                <svg class="w-6 h-6 text-emerald-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              </div>
+              <div class="font-medium">Drop .txt or .csv files here</div>
+              <div class="text-xs text-emerald-400/70">Processed 100% locally in browser memory</div>
+            </div>
+
+            <!-- Editable Textarea -->
+            <textarea id="raw-textarea" spellcheck="false" placeholder="Paste data here, drag-and-drop a .txt / .csv file, or click 'Load sample data' to test real-world enterprise PII scenarios..." class="w-full flex-1 bg-transparent text-zinc-100 font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none placeholder:text-zinc-600 select-text"></textarea>
+
+            <!-- Read-only Highlighted Preview Container (swapped in when preview is ON) -->
+            <div id="raw-preview-container" class="hidden w-full flex-1 overflow-auto font-mono text-xs sm:text-sm leading-relaxed text-zinc-300 whitespace-pre-wrap break-words select-text"></div>
+          </div>
+
+          <!-- Card Footer Status -->
+          <div class="px-5 py-2.5 border-t border-white/5 bg-black/50 text-[11px] font-mono text-zinc-500 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              Drag &amp; drop file streaming enabled
+            </span>
+            <span class="text-zinc-400 bg-zinc-850 px-2 py-0.5 rounded border border-zinc-700/60 font-medium">UTF-8 Sandboxed</span>
+          </div>
+        </div>
+
+        <!-- RIGHT CARD: SANITIZED OUTPUT (SaaS Frosted Glass Chassis) -->
+        <div id="sanitized-card" class="saas-stat-card glow-card flex flex-col min-h-[580px] rounded-2xl border border-white/10 relative overflow-hidden group transition-all duration-300">
+          <!-- High-Tech Animated Scan Line Sweeping Across Pane -->
+          <div class="scan-beam animate-scanline"></div>
+
+          <!-- Ambient Top Glow Beam -->
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-amber-400/40 to-transparent group-hover:via-amber-400 transition-all duration-300"></div>
+
+          <!-- Card Header Bar -->
+          <div class="flex items-center justify-between px-5 py-3.5 border-b border-white/5 bg-black/40 backdrop-blur-md z-10 flex-wrap gap-2">
+            <div class="flex items-center gap-2.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50"></span>
+              <span class="text-sm font-mono font-semibold text-white tracking-tight">Sanitized output</span>
+              
+              <!-- Quick Direct Mode Toggle Pills -->
+              <div class="flex items-center gap-1 bg-zinc-900/90 p-0.5 rounded-md border border-zinc-700/60 text-[11px] font-mono">
+                <button type="button" data-mode="full" class="mode-pill mode-pill-active px-2 py-0.5 rounded text-white transition-all cursor-pointer">Full</button>
+                <button type="button" data-mode="partial" class="mode-pill px-2 py-0.5 rounded text-zinc-400 hover:text-white transition-all cursor-pointer">Partial</button>
+                <button type="button" data-mode="pseudonymize" class="mode-pill px-2 py-0.5 rounded text-zinc-400 hover:text-white transition-all cursor-pointer">Pseudonym</button>
+              </div>
+
+              <span id="output-mode-badge" class="px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-zinc-800/80 text-emerald-300 border border-zinc-700/60 font-semibold shadow-inner hidden sm:inline-block">
+                Full Mask
+              </span>
+            </div>
+
+            <!-- Copy to Clipboard Button (SaaS Gradient Style) -->
+            <button id="btn-copy-output" type="button" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg font-mono text-xs font-semibold px-4 py-1.5 bg-gradient-to-b from-white via-white/95 to-white/70 text-black shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer">
+              <svg id="copy-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+              <span id="copy-label">Copy to clipboard</span>
+            </button>
+          </div>
+
+          <!-- Card Body: Formatted Read-Only Output with Dashed Redaction Tags -->
+          <div class="relative flex-1 p-5 overflow-auto z-10">
+            <div id="sanitized-output-display" class="font-mono text-xs sm:text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap break-words select-text">
+              <span class="text-zinc-600 italic font-sans text-xs">Awaiting input data. Sanitized output updates live in-memory.</span>
+            </div>
+          </div>
+
+          <!-- Card Footer Status -->
+          <div class="px-5 py-2.5 border-t border-white/5 bg-black/50 text-[11px] font-mono text-zinc-500 flex items-center justify-between z-10">
+            <span id="sanitized-meta-info" class="text-zinc-400 font-medium">0 characters redacted</span>
+            <span class="text-emerald-400 font-medium flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+              Verified Clean
+            </span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 5. DETECTION ORDER SECTION (6 NUMBERED CARDS) -->
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14">
+      <div class="mb-8">
+        <h2 class="text-2xl font-bold font-sans tracking-tight text-white flex items-center gap-2">
+          <span>Detection order</span>
+          <span class="text-xs font-mono font-normal text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded">Exact Precedence Evaluation</span>
+        </h2>
+        <p class="text-sm text-zinc-400 font-sans mt-1">
+          Higher-priority detectors claim matching byte spans first. Overlapping lower-priority pattern candidates are safely dropped to eliminate collision artifacts.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="detection-cards-grid">
+        
+        <!-- Detector 1: Credit Card -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-rose-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-rose-400 px-2 py-0.5 rounded bg-rose-950/50 border border-rose-500/30">01 / CC</span>
+            <span class="text-[10px] font-mono text-zinc-400">Mod-10 Checksum</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">Credit Card (Luhn Verified)</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Captures 13–19 digit spans with optional single spaces or hyphens using negative lookarounds. Verifies mathematical mod-10 Luhn validity.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-rose-300">
+            Rule: Failed Luhn cards are ignored from redaction &amp; increment the Blocked telemetry counter.
+          </div>
+        </div>
+
+        <!-- Detector 2: Indian Aadhaar -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500" style="transition-delay: 80ms;">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-orange-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-orange-400 px-2 py-0.5 rounded bg-orange-950/50 border border-orange-500/30">02 / Aadhaar</span>
+            <span class="text-[10px] font-mono text-zinc-400">12-Digit UIDAI</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">Indian Aadhaar</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Matches 12 digits beginning with 2–9 in 4-4-4 groupings with spaces, hyphens, or unbroken numbers.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-orange-300">
+            Boundaries: Lookarounds prevent ingestion inside 16-digit discarded card numbers or order hashes.
+          </div>
+        </div>
+
+        <!-- Detector 3: Indian PAN -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500" style="transition-delay: 160ms;">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-fuchsia-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-fuchsia-400 px-2 py-0.5 rounded bg-fuchsia-950/50 border border-fuchsia-500/30">03 / PAN</span>
+            <span class="text-[10px] font-mono text-zinc-400">Income Tax ID</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">Indian PAN</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Strict structural match on <code class="text-fuchsia-300 bg-fuchsia-950/50 px-1 py-0.5 rounded">\b[A-Z]{5}\d{4}[A-Z]\b</code> identifying personal and corporate Indian tax accounts.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-fuchsia-300">
+            Case: Normalized to uppercase during pseudonym mapping for deterministic grouping.
+          </div>
+        </div>
+
+        <!-- Detector 4: Email Addresses -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500" style="transition-delay: 240ms;">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-sky-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-sky-400 px-2 py-0.5 rounded bg-sky-950/50 border border-sky-500/30">04 / Email</span>
+            <span class="text-[10px] font-mono text-zinc-400">RFC 5322 TLD</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">Email Addresses</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Matches standard corporate and public mailboxes with validated subdomains and 2+ character top-level domain boundaries.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-sky-300">
+            Case insensitivity: Lowercased keys ensure <code class="text-sky-200">user@x.com</code> and <code class="text-sky-200">USER@X.COM</code> share placeholders.
+          </div>
+        </div>
+
+        <!-- Detector 5: IP Addresses -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500" style="transition-delay: 320ms;">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-violet-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-violet-400 px-2 py-0.5 rounded bg-violet-950/50 border border-violet-500/30">05 / IP</span>
+            <span class="text-[10px] font-mono text-zinc-400">v4 Bounded &amp; v6</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">IP Addresses</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Bounded IPv4 (octets rigorously restricted to 0–255 to reject invalid addresses like 999.12.1.1) plus 8-group and compressed (::) IPv6.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-violet-300">
+            Masking: Retains first octet for IPv4 (e.g., 192.XXX.XXX.XXX) and leading segment for IPv6.
+          </div>
+        </div>
+
+        <!-- Detector 6: Phone Numbers -->
+        <div class="detection-card saas-stat-card glow-card rounded-xl p-5 opacity-0 translate-y-4 transition-all duration-500" style="transition-delay: 400ms;">
+          <div class="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-amber-500/60 to-transparent"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-mono font-bold text-amber-400 px-2 py-0.5 rounded bg-amber-950/50 border border-amber-500/30">06 / Phone</span>
+            <span class="text-[10px] font-mono text-zinc-400">E.164 &amp; National</span>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-100 font-sans mb-1">Phone Numbers</h3>
+          <p class="text-xs text-zinc-400 font-sans leading-relaxed mb-3">
+            Indian mobile formats (+91, 0091, 0, or bare 10-digits starting 6–9 in 5+5 blocks) and North American / international standards with lookarounds.
+          </p>
+          <div class="p-2.5 rounded-lg bg-black/60 border border-gray-800 text-[11px] font-mono text-amber-300">
+            Normalization: Last-10 digit hashing unifies prefixed variants to the same pseudonym token.
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 6. COLLAPSIBLE PROMPT LOG SECTION -->
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
+      <details class="saas-stat-card glow-card group p-5 rounded-xl border border-gray-800/80 transition-colors">
+        <summary class="flex items-center justify-between cursor-pointer list-none select-none">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-emerald-400 group-open:rotate-90 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="font-sans font-semibold text-sm text-zinc-200">Prompt log &amp; Architecture Audit</span>
+            <span class="text-xs font-mono text-zinc-400 bg-gray-800/80 border border-gray-700/60 px-2 py-0.5 rounded">Security Specs</span>
+          </div>
+          <button id="btn-download-log" type="button" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-gray-800 hover:bg-gray-700 text-xs font-mono text-zinc-200 border border-gray-700/80 transition-all active:scale-95 cursor-pointer" onclick="event.stopPropagation(); downloadPromptLog();">
+            <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>Download prompt log</span>
+          </button>
+        </summary>
+
+        <div class="mt-4 pt-4 border-t border-gray-800/80 font-mono text-xs text-zinc-400 space-y-4 leading-relaxed">
+          <div class="bg-black/60 p-4 rounded-lg border border-gray-800/90 text-zinc-300 space-y-2">
+            <div class="text-emerald-400 font-semibold">[SYSTEM SPECIFICATION: BLACKLINE ENGINE]</div>
+            <div>• Runtime: 100% Client-Side In-Memory (Zero API egress, zero backend, zero external analytics).</div>
+            <div>• Precedence Order: Credit Card (Luhn Validated) &gt; Aadhaar &gt; PAN &gt; Email &gt; IP &gt; Phone.</div>
+            <div>• Luhn Algorithm: Mod-10 checksum validation with doubled alternating digits. Non-matching cards remain unredacted and increment the Blocked telemetry register.</div>
+            <div>• Non-Destructive Slicing: Output builds via deterministic byte-span reconstruction. Character positions outside matched spans are guaranteed byte-for-byte identical.</div>
+            <div>• Deterministic Pseudonymization: Case normalization (lowercased emails, uppercased PANs, stripped-digit Aadhaar/CC, and last-10-digit normalized phones) maintains 1:1 consistent entity aliases within each document pass.</div>
+            <div>• Accessibility: Prefers-reduced-motion media query disengages canvas particle flow, cursor followers, telemetry running counters, and scanlines. Visible keyboard focus rings enabled globally.</div>
+          </div>
+
+          <div class="text-zinc-500 text-[11px]">
+            Engine signature: SHA256-CLIENT-VERIFIED-V2.6 · DOM Engine ES6+ Vanilla · No build steps required.
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Footer -->
+    <footer class="border-t border-gray-800/80 py-8 text-center text-xs font-mono text-zinc-500 bg-black/40">
+      <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>Blackline PII Engine · Zero-Trust In-Browser Redaction</span>
+        </div>
+        <div>
+          <span>Local Memory Sandboxed · No Server Transits</span>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- APPLICATION JAVASCRIPT ENGINE -->
+  <script>
+    /**
+     * BLACKLINE ENGINE - 100% CLIENT-SIDE PII SANITIZATION & REDACTION
+     * Built with Vanilla ES6+ & Tailwind CSS
+     */
+    (function () {
+      'use strict';
+
+      // --- STATE & METADATA ---
+      let currentInputText = '';
+      let currentEntities = [];
+      let currentBlockedLuhn = 0;
+      let currentRedactionMode = 'full'; // 'full' | 'partial' | 'pseudonymize'
+      let isPreviewModeOn = false;
+      let uploadedFileName = null;
+
+      // Telemetry animation tracker
+      const telemetryValues = {
+        cc: 0,
+        aadhaar: 0,
+        pan: 0,
+        email: 0,
+        ip: 0,
+        phone: 0,
+        total: 0,
+        blocked: 0
+      };
+
+      // Motion preference
+      const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+      let prefersReducedMotion = motionQuery.matches;
+      motionQuery.addEventListener('change', (e) => {
+        prefersReducedMotion = e.matches;
+      });
+
+      // --- DOM REFERENCES ---
+      const rawTextarea = document.getElementById('raw-textarea');
+      const rawPreviewContainer = document.getElementById('raw-preview-container');
+      const sanitizedOutputDisplay = document.getElementById('sanitized-output-display');
+      const rawMetaInfo = document.getElementById('raw-meta-info');
+      const sanitizedMetaInfo = document.getElementById('sanitized-meta-info');
+      const outputModeBadge = document.getElementById('output-mode-badge');
+      const pseudoCounterBadge = document.getElementById('pseudo-counter-badge');
+      const rawCard = document.getElementById('raw-card');
+      const dropzoneOverlay = document.getElementById('dropzone-overlay');
+      const btnTogglePreview = document.getElementById('btn-toggle-preview');
+      const previewToggleIndicator = document.getElementById('preview-toggle-indicator');
+      const previewToggleText = document.getElementById('preview-toggle-text');
+      const btnClearRaw = document.getElementById('btn-clear-raw');
+      const btnLoadSample = document.getElementById('btn-load-sample');
+      const heroBtnSample = document.getElementById('hero-btn-sample');
+      const fileUploadInput = document.getElementById('file-upload-input');
+      const fileUploadLabel = document.getElementById('file-upload-label');
+      const btnExport = document.getElementById('btn-export');
+      const btnCopyOutput = document.getElementById('btn-copy-output');
+      const copyLabel = document.getElementById('copy-label');
+      const copyIcon = document.getElementById('copy-icon');
+      const scrollProgressBar = document.getElementById('scroll-progress-bar');
+      const toastEl = document.getElementById('toast');
+      const toastMessageEl = document.getElementById('toast-message');
+      const toastIconEl = document.getElementById('toast-icon');
+
+      // Telemetry Element References
+      const statElements = {
+        cc: document.getElementById('stat-cc'),
+        aadhaar: document.getElementById('stat-aadhaar'),
+        pan: document.getElementById('stat-pan'),
+        email: document.getElementById('stat-email'),
+        ip: document.getElementById('stat-ip'),
+        phone: document.getElementById('stat-phone'),
+        total: document.getElementById('stat-total'),
+        blocked: document.getElementById('stat-blocked')
+      };
+
+      // --- REALISTIC INCIDENT SAMPLE DATA ---
+      const SAMPLE_INCIDENT_TEXT = `INCIDENT REPORT // ESCALATION TICKET #SEC-98421
+Classification: CONFIDENTIAL - PRIVILEGED SECURITY AUDIT
+Timestamp: 2026-11-27T08:14:02Z
+Author: alex.vance@blackline-sec.internal (escalated from ALEX.VANCE@blackline-sec.internal)
+
+1. AFFECTED IDENTITY & TAX RECORDS
+Customer Profile: Priya K. Sharma
+Permanent Account Number (PAN): ABCDE1234F
+Aadhaar Identity Verification:
+  - Primary UIDAI Record: 2345 6789 0123
+  - Secondary Physical Card: 9876-5432-1098
+  - Legacy Digilocker Ref: 456789012345
+
+2. CONTACT ENDPOINTS
+Indian Primary Mobile: +91 98765 43210
+Alternate Contact (Leading Zero): 09876543210
+Direct SMS Gateway Format: 98765-43210
+North America Regional Office: (415) 555-2671
+International Dispatch Desk: +1 415 555 2671
+
+3. TELEMETRY & NETWORK LOGS
+VPC Public Gateway: 192.168.1.105
+Cluster Internal DB: 10.0.4.22
+Diagnostic Ping Endpoint: 999.12.1.1 (Invalid IPv4 - out of range octet 999)
+Core IPv6 Backbone: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+Local IPv6 Node: fe80::1ff:fe23:4567:890a
+
+4. FINANCIAL CLEARING & TRANSACTION SETTLEMENTS
+Active Subscription Visa: 4532-0150-1234-5671 (Re-verified on card ledger: 4532-0150-1234-5671)
+Corporate Mastercard: 5424 1801 2345 6789
+Executive Amex Card: 3782 822463 10005
+
+5. INTERNAL SYSTEM IDENTIFIERS (NON-PCI REJECTIONS)
+Batch Fulfillment Order Number: 8821940182740192 (16 digits, fails Luhn mod-10 verification)
+Distributed Trace Transaction ID: 9912847102938475 (16 digits, fails Luhn mod-10 verification)
+Hyphenated Order Sequence: 8821-9401-8274-0192 (16 digits, fails Luhn mod-10 verification)
+Unrelated 22-Digit Hash: 1234567890123456789012 (Must not match phone or card boundaries)
+`;
+
+      // --- UTILITY: HTML ESCAPING ---
+      function escapeHTML(str) {
+        if (!str) return '';
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      // --- TOAST NOTIFICATION ---
+      let toastTimeout = null;
+      function showToast(message, isError = false) {
+        if (toastTimeout) clearTimeout(toastTimeout);
+        toastMessageEl.textContent = message;
+        if (isError) {
+          toastIconEl.innerHTML = '<svg class="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+          toastEl.classList.remove('border-zinc-700/80');
+          toastEl.classList.add('border-rose-500/80');
+        } else {
+          toastIconEl.innerHTML = '<svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
+          toastEl.classList.remove('border-rose-500/80');
+          toastEl.classList.add('border-zinc-700/80');
+        }
+
+        toastEl.classList.remove('translate-y-16', 'opacity-0', 'pointer-events-none');
+        toastEl.classList.add('translate-y-0', 'opacity-100');
+
+        toastTimeout = setTimeout(() => {
+          toastEl.classList.add('translate-y-16', 'opacity-0', 'pointer-events-none');
+          toastEl.classList.remove('translate-y-0', 'opacity-100');
+        }, 3000);
+      }
+
+      // --- 1. LUHN MOD-10 VALIDATION ---
+      function validateLuhn(numStr) {
+        const digits = numStr.replace(/\D/g, '');
+        if (digits.length < 13 || digits.length > 19) return false;
+
+        let sum = 0;
+        let shouldDouble = false;
+        for (let i = digits.length - 1; i >= 0; i--) {
+          let digit = parseInt(digits.charAt(i), 10);
+          if (shouldDouble) {
+            digit *= 2;
+            if (digit > 9) digit -= 9;
+          }
+          sum += digit;
+          shouldDouble = !shouldDouble;
+        }
+        return (sum % 10) === 0;
+      }
+
+      // --- 2. PSEUDONYMIZATION KEY NORMALIZER ---
+      function keyOf(entity) {
+        const raw = entity.rawText;
+        switch (entity.type) {
+          case 'email':
+            return raw.toLowerCase().trim();
+          case 'pan':
+            return raw.toUpperCase().trim();
+          case 'cc':
+          case 'aadhaar':
+            return raw.replace(/\D/g, '');
+          case 'phone': {
+            const digits = raw.replace(/\D/g, '');
+            return digits.length > 10 ? digits.slice(-10) : digits;
+          }
+          case 'ip':
+            return raw.toLowerCase().trim();
+          default:
+            return raw.trim();
+        }
+      }
+
+      // --- 3. PARTIAL MASKING ENGINE ---
+      function partialMask(entity) {
+        const raw = entity.rawText;
+        switch (entity.type) {
+          case 'email': {
+            const atIdx = raw.indexOf('@');
+            if (atIdx === -1) return '***@domain.com';
+            const user = raw.slice(0, atIdx);
+            const domain = raw.slice(atIdx);
+            const visible = user.slice(0, Math.min(2, user.length));
+            return `${visible}***${domain}`;
+          }
+          case 'cc': {
+            const digits = raw.replace(/\D/g, '');
+            const last4 = digits.slice(-4);
+            return `XXXX-XXXX-XXXX-${last4}`;
+          }
+          case 'aadhaar': {
+            const digits = raw.replace(/\D/g, '');
+            const last4 = digits.slice(-4);
+            return `XXXX-XXXX-${last4}`;
+          }
+          case 'pan': {
+            const clean = raw.toUpperCase().trim();
+            if (clean.length < 10) return 'XXXXXXXXXX';
+            return `${clean.slice(0, 2)}XXXXXXX${clean.slice(-1)}`;
+          }
+          case 'phone': {
+            const digits = raw.replace(/\D/g, '');
+            const last2 = digits.slice(-2);
+            let prefix = '';
+            if (raw.trim().startsWith('+')) {
+              const m = raw.match(/^\+(\d{1,3})/);
+              if (m) prefix = `+${m[1]}-`;
+            }
+            return `${prefix}XXXXXXXX${last2}`;
+          }
+          case 'ip': {
+            if (raw.includes('.')) {
+              const octets = raw.split('.');
+              return `${octets[0]}.XXX.XXX.XXX`;
+            } else {
+              const groups = raw.split(':');
+              const first = groups[0] || 'XXXX';
+              return `${first}:XXXX:XXXX:XXXX`;
+            }
+          }
+          default:
+            return '[REDACTED]';
+        }
+      }
+
+      // --- 4. ENTITY DETECTION ENGINE WITH STRICT PRECEDENCE ---
+      function detectEntities(text) {
+        if (!text) {
+          return {
+            entities: [],
+            blockedLuhn: 0,
+            counts: { cc: 0, aadhaar: 0, pan: 0, email: 0, ip: 0, phone: 0, total: 0 }
+          };
+        }
+
+        const claimedRanges = [];
+        const entities = [];
+        let blockedLuhn = 0;
+
+        function isOverlapping(start, end) {
+          for (let i = 0; i < claimedRanges.length; i++) {
+            const [cs, ce] = claimedRanges[i];
+            if (Math.max(start, cs) < Math.min(end, ce)) {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        // RULE 1: CREDIT CARD (13-19 Digits + Luhn)
+        const ccRegex = /(?<!\d)(?:(?:\d[ -]?){13,19})(?!\d)/g;
+        let match;
+        while ((match = ccRegex.exec(text)) !== null) {
+          let raw = match[0].replace(/[ -]+$/, '');
+          const start = match.index;
+          const end = start + raw.length;
+          const digits = raw.replace(/\D/g, '');
+
+          if (digits.length >= 13 && digits.length <= 19) {
+            if (validateLuhn(digits)) {
+              if (!isOverlapping(start, end)) {
+                claimedRanges.push([start, end]);
+                entities.push({
+                  type: 'cc',
+                  start,
+                  end,
+                  rawText: raw,
+                  label: 'Credit Card (Luhn Valid)'
+                });
+              }
+            } else {
+              blockedLuhn++;
+              claimedRanges.push([start, end]);
+            }
+          }
+        }
+
+        // RULE 2: INDIAN AADHAAR
+        const aadhaarRegex = /(?<!\d)[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}(?!\d)/g;
+        while ((match = aadhaarRegex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (!isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'aadhaar',
+              start,
+              end,
+              rawText: raw,
+              label: 'Indian Aadhaar (UIDAI)'
+            });
+          }
+        }
+
+        // RULE 3: INDIAN PAN
+        const panRegex = /\b[A-Z]{5}\d{4}[A-Z]\b/g;
+        while ((match = panRegex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (!isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'pan',
+              start,
+              end,
+              rawText: raw,
+              label: 'Indian PAN'
+            });
+          }
+        }
+
+        // RULE 4: EMAIL ADDRESSES
+        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+        while ((match = emailRegex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (!isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'email',
+              start,
+              end,
+              rawText: raw,
+              label: 'Email Address'
+            });
+          }
+        }
+
+        // RULE 5: IP ADDRESSES
+        const ipv4Regex = /(?<![0-9.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![0-9.])/g;
+        while ((match = ipv4Regex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (!isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'ip',
+              start,
+              end,
+              rawText: raw,
+              label: 'IPv4 Address'
+            });
+          }
+        }
+
+        const ipv6Regex = /(?<![a-zA-Z0-9:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?::[0-9a-fA-F]{1,4}){1,7}|::)(?![a-zA-Z0-9:])/g;
+        while ((match = ipv6Regex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (raw.length > 2 && !isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'ip',
+              start,
+              end,
+              rawText: raw,
+              label: 'IPv6 Address'
+            });
+          }
+        }
+
+        // RULE 6: PHONE NUMBERS
+        const phoneRegex = /(?<![\w+])(?:(?:\+?91[\s-]?)?(?:0)?[6-9]\d{4}[\s-]?\d{5}|(?:\+?91[\s-]?)?(?:0)?[6-9]\d{9}|(?:\+?1[\s-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4})(?!\d)/g;
+        while ((match = phoneRegex.exec(text)) !== null) {
+          const raw = match[0];
+          const start = match.index;
+          const end = start + raw.length;
+          if (!isOverlapping(start, end)) {
+            claimedRanges.push([start, end]);
+            entities.push({
+              type: 'phone',
+              start,
+              end,
+              rawText: raw,
+              label: 'Phone Number'
+            });
+          }
+        }
+
+        entities.sort((a, b) => a.start - b.start);
+
+        const counts = { cc: 0, aadhaar: 0, pan: 0, email: 0, ip: 0, phone: 0, total: entities.length };
+        for (const e of entities) {
+          if (counts[e.type] !== undefined) {
+            counts[e.type]++;
+          }
+        }
+
+        return { entities, blockedLuhn, counts };
+      }
+
+      // --- 5. REDACTION APPLICATION ENGINE ---
+      function applyRedaction(text, entities, mode) {
+        if (!text || entities.length === 0) {
+          return {
+            plainText: text,
+            htmlOutput: escapeHTML(text),
+            uniquePseudoCount: 0
+          };
+        }
+
+        const fullMaskMap = {
+          email: '[REDACTED_EMAIL]',
+          phone: '[REDACTED_PHONE]',
+          ip: '[REDACTED_IP]',
+          pan: '[REDACTED_PAN]',
+          aadhaar: '[REDACTED_AADHAAR]',
+          cc: '[REDACTED_CC]'
+        };
+
+        const badgeClasses = {
+          cc: 'bg-rose-950/60 text-rose-300 border-rose-500/60',
+          aadhaar: 'bg-orange-950/60 text-orange-300 border-orange-500/60',
+          pan: 'bg-fuchsia-950/60 text-fuchsia-300 border-fuchsia-500/60',
+          email: 'bg-sky-950/60 text-sky-300 border-sky-500/60',
+          ip: 'bg-violet-950/60 text-violet-300 border-violet-500/60',
+          phone: 'bg-amber-950/60 text-amber-300 border-amber-500/60'
+        };
+
+        const pseudoMap = new Map();
+        const pseudoCounters = { cc: 0, aadhaar: 0, pan: 0, email: 0, ip: 0, phone: 0 };
+        const prefixMap = {
+          email: 'EMAIL',
+          phone: 'PHONE',
+          ip: 'IP',
+          pan: 'PAN',
+          aadhaar: 'AADHAAR',
+          cc: 'CC'
+        };
+
+        for (const e of entities) {
+          const normKey = `${e.type}:${keyOf(e)}`;
+          if (!pseudoMap.has(normKey)) {
+            pseudoCounters[e.type] = (pseudoCounters[e.type] || 0) + 1;
+            const seq = String(pseudoCounters[e.type]).padStart(2, '0');
+            const token = `${prefixMap[e.type] || 'ENTITY'}_${seq}`;
+            pseudoMap.set(normKey, token);
+          }
+        }
+        const uniquePseudoCount = pseudoMap.size;
+
+        let plainOutput = '';
+        let htmlOutput = '';
+        let lastIndex = 0;
+
+        for (const entity of entities) {
+          const unmaskedSpan = text.slice(lastIndex, entity.start);
+          plainOutput += unmaskedSpan;
+          htmlOutput += escapeHTML(unmaskedSpan);
+
+          let token = '';
+          if (mode === 'full') {
+            token = fullMaskMap[entity.type] || '[REDACTED]';
+          } else if (mode === 'partial') {
+            token = partialMask(entity);
+          } else if (mode === 'pseudonymize') {
+            const normKey = `${entity.type}:${keyOf(entity)}`;
+            token = pseudoMap.get(normKey);
+          }
+
+          plainOutput += token;
+
+          const colorClass = badgeClasses[entity.type] || 'bg-zinc-800 text-zinc-300 border-zinc-700';
+          htmlOutput += `<mark class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono border border-dashed ${colorClass} select-all font-semibold" title="${entity.label}: ${escapeHTML(entity.rawText)}">${escapeHTML(token)}</mark>`;
+
+          lastIndex = entity.end;
+        }
+
+        const tail = text.slice(lastIndex);
+        plainOutput += tail;
+        htmlOutput += escapeHTML(tail);
+
+        return { plainText: plainOutput, htmlOutput, uniquePseudoCount };
+      }
+
+      // --- 6. RAW INPUT HIGHLIGHTED PREVIEW BUILDER ---
+      function buildRawHighlightedPreview(text, entities) {
+        if (!text) return '<span class="text-zinc-600 italic">No input data to highlight.</span>';
+        if (entities.length === 0) return escapeHTML(text);
+
+        const highlightClasses = {
+          cc: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+          aadhaar: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+          pan: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40',
+          email: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+          ip: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
+          phone: 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+        };
+
+        let result = '';
+        let lastIndex = 0;
+
+        for (const e of entities) {
+          result += escapeHTML(text.slice(lastIndex, e.start));
+          const color = highlightClasses[e.type] || 'bg-zinc-700 text-zinc-200 border-zinc-600';
+
+          result += `<mark class="relative inline-flex items-center px-1.5 py-0.5 rounded-md border ${color} group cursor-help font-mono text-xs">` +
+            `${escapeHTML(e.rawText)}` +
+            `<span class="pointer-events-none absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 px-2.5 py-1 text-[11px] font-sans font-medium text-white bg-zinc-900 border border-zinc-700/80 rounded-md shadow-2xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-30">${e.label}</span>` +
+            `</mark>`;
+
+          lastIndex = e.end;
+        }
+        result += escapeHTML(text.slice(lastIndex));
+        return result;
+      }
+
+      // --- 7. RUNNING NUMBERS TELEMETRY ANIMATION ---
+      const runningAnimations = {};
+
+      function animateCounter(key, targetValue) {
+        const el = statElements[key];
+        if (!el) return;
+
+        const startValue = telemetryValues[key] || 0;
+        if (startValue === targetValue) return;
+
+        if (prefersReducedMotion) {
+          telemetryValues[key] = targetValue;
+          el.textContent = targetValue.toLocaleString();
+          return;
+        }
+
+        if (runningAnimations[key]) {
+          cancelAnimationFrame(runningAnimations[key]);
+        }
+
+        const duration = 650;
+        const startTime = performance.now();
+
+        function easeOutCubic(t) {
+          return 1 - Math.pow(1 - t, 3);
+        }
+
+        function frame(now) {
+          const elapsed = now - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = easeOutCubic(progress);
+          const current = Math.round(startValue + (targetValue - startValue) * eased);
+
+          el.textContent = current.toLocaleString();
+
+          if (progress < 1) {
+            runningAnimations[key] = requestAnimationFrame(frame);
+          } else {
+            telemetryValues[key] = targetValue;
+            el.textContent = targetValue.toLocaleString();
+            delete runningAnimations[key];
+          }
+        }
+
+        runningAnimations[key] = requestAnimationFrame(frame);
+      }
+
+      function updateTelemetry(counts, blockedLuhn) {
+        animateCounter('cc', counts.cc);
+        animateCounter('aadhaar', counts.aadhaar);
+        animateCounter('pan', counts.pan);
+        animateCounter('email', counts.email);
+        animateCounter('ip', counts.ip);
+        animateCounter('phone', counts.phone);
+        animateCounter('total', counts.total);
+        animateCounter('blocked', blockedLuhn);
+      }
+
+      // --- 8. REFRESH & SYNCHRONIZE PIPELINE ---
+      let cachedSanitizedPlain = '';
+
+      function runPipeline() {
+        currentInputText = rawTextarea.value;
+
+        // 1. Detection Pass
+        const { entities, blockedLuhn, counts } = detectEntities(currentInputText);
+        currentEntities = entities;
+        currentBlockedLuhn = blockedLuhn;
+
+        // 2. Redaction Pass
+        const { plainText, htmlOutput, uniquePseudoCount } = applyRedaction(
+          currentInputText,
+          entities,
+          currentRedactionMode
+        );
+        cachedSanitizedPlain = plainText;
+
+        // 3. Update Sanitized Output Pane
+        if (!currentInputText) {
+          sanitizedOutputDisplay.innerHTML = `
+            <div class="h-64 flex flex-col items-center justify-center text-center p-6 text-zinc-400">
+              <div class="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3 text-emerald-400 shadow-inner">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+              </div>
+              <p class="text-sm font-semibold text-white mb-1">Active Mode: <span class="text-emerald-400 font-mono">${modeLabels[currentRedactionMode]}</span></p>
+              <p class="text-xs text-zinc-500 max-w-sm mb-4">Input is currently empty. Click below to load sample incident logs and see live <strong class="text-zinc-300">${modeLabels[currentRedactionMode]}</strong> in action.</p>
+              <button type="button" onclick="window.blacklineLoadSample()" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-mono font-medium transition-all hover:scale-105 active:scale-95 cursor-pointer">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                Load Sample Data (${modeLabels[currentRedactionMode]})
+              </button>
+            </div>`;
+        } else {
+          sanitizedOutputDisplay.innerHTML = htmlOutput;
+        }
+
+        // 4. Update Meta Info Badges
+        const charCount = currentInputText.length;
+        const lineCount = currentInputText ? currentInputText.split(/\r\n|\r|\n/).length : 0;
+        rawMetaInfo.textContent = `${charCount.toLocaleString()} chars · ${lineCount.toLocaleString()} lines`;
+        sanitizedMetaInfo.textContent = `${counts.total} items redacted · ${blockedLuhn} blocked`;
+
+        // 5. Update Pseudonym Counter in Segmented Control
+        if (pseudoCounterBadge) {
+          pseudoCounterBadge.textContent = uniquePseudoCount;
+        }
+
+        // 6. Update Output Mode Badge Text
+        const modeLabels = {
+          full: 'Full Mask',
+          partial: 'Partial Mask',
+          pseudonymize: `Pseudonymize (${uniquePseudoCount})`
+        };
+        if (outputModeBadge) {
+          outputModeBadge.textContent = modeLabels[currentRedactionMode] || 'Sanitized';
+        }
+
+        // 7. Update Telemetry Numbers
+        updateTelemetry(counts, blockedLuhn);
+
+        // 8. Update Raw Preview if Active
+        if (isPreviewModeOn) {
+          rawPreviewContainer.innerHTML = buildRawHighlightedPreview(currentInputText, entities);
+        }
+      }
+
+      // --- 9. EXPLICIT MODE SWITCHER ENGINE ---
+      function setRedactionMode(newMode) {
+        if (!['full', 'partial', 'pseudonymize'].includes(newMode)) return;
+        currentRedactionMode = newMode;
+
+        // Update radio inputs state
+        const radios = document.querySelectorAll('input[name="redaction-mode"]');
+        radios.forEach(radio => {
+          radio.checked = (radio.value === newMode);
+        });
+
+        // Update visual buttons styling in top bar
+        const modeBtns = document.querySelectorAll('.mode-btn');
+        modeBtns.forEach(btn => {
+          const isSelected = btn.dataset.mode === newMode;
+          btn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+          if (isSelected) {
+            btn.classList.add('mode-btn-active');
+            btn.classList.remove('text-zinc-400');
+          } else {
+            btn.classList.remove('mode-btn-active');
+            btn.classList.add('text-zinc-400');
+          }
+        });
+
+        // Update quick mode pills in workspace card header
+        const modePills = document.querySelectorAll('.mode-pill');
+        modePills.forEach(pill => {
+          if (pill.dataset.mode === newMode) {
+            pill.classList.add('mode-pill-active', 'text-white');
+            pill.classList.remove('text-zinc-400');
+          } else {
+            pill.classList.remove('mode-pill-active', 'text-white');
+            pill.classList.add('text-zinc-400');
+          }
+        });
+
+        // Run pipeline
+        runPipeline();
+
+        const readableTitles = {
+          full: 'Full Mask (Tokens [REDACTED_...])',
+          partial: 'Partial Mask (Cues ro***@domain, XXXX-4242)',
+          pseudonymize: 'Pseudonymize (Aliases EMAIL_01, CC_01)'
+        };
+        showToast(`Active Mode: ${readableTitles[newMode] || newMode}`);
+      }
+
+      // Wire click events on mode buttons and quick pills
+      const modeClickTargets = document.querySelectorAll('.mode-btn, .mode-pill');
+      modeClickTargets.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const targetMode = btn.dataset.mode;
+          if (targetMode) {
+            setRedactionMode(targetMode);
+          }
+        });
+      });
+
+      // --- 10. EXPORT & DOWNLOAD HANDLERS ---
+      function exportFile() {
+        try {
+          if (!cachedSanitizedPlain && !currentInputText) {
+            showToast('No sanitized content to export.', true);
+            return;
+          }
+
+          let filename = 'sanitized_output.txt';
+          if (uploadedFileName) {
+            const dotIdx = uploadedFileName.lastIndexOf('.');
+            if (dotIdx !== -1) {
+              const base = uploadedFileName.slice(0, dotIdx);
+              const ext = uploadedFileName.slice(dotIdx).toLowerCase();
+              if (ext === '.csv') {
+                filename = `${base}_sanitized.csv`;
+              } else {
+                filename = `${base}_sanitized.txt`;
+              }
+            }
+          }
+
+          const blob = new Blob([cachedSanitizedPlain], { type: 'text/plain;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+
+          showToast(`Exported ${filename} successfully`);
+        } catch (err) {
+          console.error('Export failure:', err);
+          showToast('Failed to export sanitized file.', true);
+        }
+      }
+
+      window.downloadPromptLog = function () {
+        try {
+          const logContent = `# Blackline — Architecture & Technical Audit Log
+Runtime: 100% Client-Side In-Memory
+Timestamp: ${new Date().toISOString()}
+
+## Security Model
+- Zero External Analytics, Zero CDN Trackers, Zero Data Exfiltration
+- Strict Precedence Order:
+  1. Credit Card (13-19 Digits with Luhn Mod-10 Verification)
+  2. Indian Aadhaar (12 Digits, starting 2-9, 4-4-4 grouped or unbroken)
+  3. Indian PAN (\\b[A-Z]{5}\\d{4}[A-Z]\\b)
+  4. Email Addresses (RFC 5322 Standard with 2+ char TLD)
+  5. IP Addresses (Bounded IPv4 0-255 per octet & IPv6)
+  6. Phone Numbers (Indian National & E.164 Global Standards)
+
+## Telemetry Status
+- Credit Cards Verified: ${telemetryValues.cc}
+- Aadhaar Verified: ${telemetryValues.aadhaar}
+- PAN IDs Detected: ${telemetryValues.pan}
+- Emails Detected: ${telemetryValues.email}
+- IP Endpoints: ${telemetryValues.ip}
+- Phone Numbers: ${telemetryValues.phone}
+- Total Redacted Tokens: ${telemetryValues.total}
+- Blocked Cards (Failed Luhn): ${telemetryValues.blocked}
+
+Generated by Blackline Security Client Engine.`;
+
+          const blob = new Blob([logContent], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'blackline_audit_log.md';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          showToast('Downloaded prompt audit log');
+        } catch (e) {
+          showToast('Failed to download audit log', true);
+        }
+      };
+
+      // --- 11. CLIPBOARD COPY HANDLER ---
+      function copySanitizedOutput() {
+        if (!cachedSanitizedPlain) {
+          showToast('No content to copy.', true);
+          return;
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(cachedSanitizedPlain)
+            .then(() => {
+              copyLabel.textContent = 'Copied!';
+              copyIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>';
+              copyIcon.classList.add('text-emerald-400');
+              showToast('Sanitized output copied to clipboard');
+
+              setTimeout(() => {
+                copyLabel.textContent = 'Copy to clipboard';
+                copyIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>';
+                copyIcon.classList.remove('text-emerald-400');
+              }, 2000);
+            })
+            .catch(() => {
+              fallbackCopy(cachedSanitizedPlain);
+            });
+        } else {
+          fallbackCopy(cachedSanitizedPlain);
+        }
+      }
+
+      function fallbackCopy(text) {
+        const dummy = document.createElement('textarea');
+        dummy.value = text;
+        dummy.setAttribute('readonly', '');
+        dummy.style.position = 'absolute';
+        dummy.style.left = '-9999px';
+        document.body.appendChild(dummy);
+        dummy.select();
+        try {
+          document.execCommand('copy');
+          showToast('Sanitized output copied to clipboard');
+        } catch (err) {
+          showToast('Unable to copy to clipboard', true);
+        }
+        document.body.removeChild(dummy);
+      }
+
+      // --- 12. FILE DRAG & DROP AND UPLOAD HANDLERS ---
+      function handleLoadedFile(file) {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          uploadedFileName = file.name;
+          fileUploadLabel.textContent = file.name.length > 18 ? file.name.slice(0, 15) + '...' : file.name;
+          rawTextarea.value = e.target.result;
+          runPipeline();
+          showToast(`Loaded ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+        };
+        reader.onerror = function () {
+          showToast('Failed to read file from disk.', true);
+        };
+        reader.readAsText(file);
+      }
+
+      fileUploadInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) handleLoadedFile(file);
+      });
+
+      ['dragenter', 'dragover'].forEach(evt => {
+        rawCard.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzoneOverlay.classList.remove('opacity-0');
+          dropzoneOverlay.classList.add('opacity-100');
+          rawCard.classList.add('border-emerald-500/80');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach(evt => {
+        rawCard.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzoneOverlay.classList.remove('opacity-100');
+          dropzoneOverlay.classList.add('opacity-0');
+          rawCard.classList.remove('border-emerald-500/80');
+        });
+      });
+
+      rawCard.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          handleLoadedFile(files[0]);
+        }
+      });
+
+      // --- 13. SAMPLE DATA LOADERS ---
+      function loadSampleData(silent = false) {
+        uploadedFileName = 'incident_sample.txt';
+        fileUploadLabel.textContent = 'Upload .txt / .csv';
+        rawTextarea.value = SAMPLE_INCIDENT_TEXT;
+        runPipeline();
+        if (!silent) {
+          showToast('Loaded incident sample data');
+          const workspace = document.getElementById('workspace');
+          if (workspace) {
+            workspace.scrollIntoView({ behavior: 'smooth' });
+          }
+        }
+      }
+      window.blacklineLoadSample = () => loadSampleData(false);
+      window.setRedactionMode = setRedactionMode;
+
+      btnLoadSample.addEventListener('click', loadSampleData);
+      heroBtnSample.addEventListener('click', loadSampleData);
+
+      btnClearRaw.addEventListener('click', () => {
+        rawTextarea.value = '';
+        uploadedFileName = null;
+        fileUploadLabel.textContent = 'Upload .txt / .csv';
+        runPipeline();
+        showToast('Raw input cleared');
+      });
+
+      btnTogglePreview.addEventListener('click', () => {
+        isPreviewModeOn = !isPreviewModeOn;
+        btnTogglePreview.setAttribute('aria-pressed', isPreviewModeOn ? 'true' : 'false');
+        previewToggleText.textContent = isPreviewModeOn ? 'on' : 'off';
+        previewToggleText.className = isPreviewModeOn ? 'text-emerald-400 font-bold' : 'text-zinc-400 font-normal';
+        
+        if (isPreviewModeOn) {
+          previewToggleIndicator.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse-subtle';
+          rawTextarea.classList.add('hidden');
+          rawPreviewContainer.classList.remove('hidden');
+          rawPreviewContainer.innerHTML = buildRawHighlightedPreview(currentInputText, currentEntities);
+        } else {
+          previewToggleIndicator.className = 'w-2 h-2 rounded-full bg-zinc-500';
+          rawPreviewContainer.classList.add('hidden');
+          rawTextarea.classList.remove('hidden');
+          rawTextarea.focus();
+        }
+      });
+
+      rawTextarea.addEventListener('input', runPipeline);
+      btnExport.addEventListener('click', exportFile);
+      btnCopyOutput.addEventListener('click', copySanitizedOutput);
+
+      // --- 14. SCROLL PROGRESS & PARALLAX ---
+      const parallaxContainer = document.getElementById('parallax-container');
+
+      window.addEventListener('scroll', () => {
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+        const progress = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+        scrollProgressBar.style.width = `${progress}%`;
+
+        if (!prefersReducedMotion && parallaxContainer) {
+          parallaxContainer.style.backgroundPosition = `0px ${scrollTop * 0.15}px`;
+        }
+      }, { passive: true });
+
+      // --- 15. INTERSECTION OBSERVER FOR DETECTION ORDER CARDS ---
+      const detectionCards = document.querySelectorAll('.detection-card');
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              entry.target.classList.remove('opacity-0', 'translate-y-4');
+              entry.target.classList.add('opacity-100', 'translate-y-0');
+              observer.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.15 });
+
+        detectionCards.forEach(card => observer.observe(card));
+      } else {
+        detectionCards.forEach(card => card.classList.remove('opacity-0', 'translate-y-4'));
+      }
+
+      // --- 16. CUSTOM CURSOR & SPOTLIGHT ENGINE (pointer: fine) ---
+      const cursorDot = document.getElementById('cursor-dot');
+      const cursorRing = document.getElementById('cursor-ring');
+      const spotlight = document.getElementById('pointer-spotlight');
+      const finePointer = window.matchMedia('(pointer: fine)').matches;
+
+      if (finePointer && !prefersReducedMotion) {
+        document.body.classList.add('custom-cursor-active');
+        cursorDot.classList.remove('opacity-0');
+        cursorRing.classList.remove('opacity-0');
+        spotlight.classList.remove('opacity-0');
+
+        let mouseX = window.innerWidth / 2;
+        let mouseY = window.innerHeight / 2;
+        let ringX = mouseX;
+        let ringY = mouseY;
+        let isHoveringInteractive = false;
+
+        window.addEventListener('mousemove', (e) => {
+          mouseX = e.clientX;
+          mouseY = e.clientY;
+
+          cursorDot.style.transform = `translate3d(${mouseX}px, ${mouseY}px, 0) translate(-50%, -50%)`;
+          document.documentElement.style.setProperty('--spot-x', `${mouseX}px`);
+          document.documentElement.style.setProperty('--spot-y', `${mouseY}px`);
+
+          const target = e.target;
+          const interactive = target.closest('button, a, label, summary, input, textarea, .cursor-pointer');
+          if (interactive && !isHoveringInteractive) {
+            isHoveringInteractive = true;
+            cursorRing.classList.add('w-12', 'h-12', 'border-emerald-400', 'bg-emerald-500/10');
+            cursorRing.classList.remove('w-8', 'h-8', 'border-emerald-400/50');
+          } else if (!interactive && isHoveringInteractive) {
+            isHoveringInteractive = false;
+            cursorRing.classList.remove('w-12', 'h-12', 'border-emerald-400', 'bg-emerald-500/10');
+            cursorRing.classList.add('w-8', 'h-8', 'border-emerald-400/50');
+          }
+        }, { passive: true });
+
+        function renderRing() {
+          ringX += (mouseX - ringX) * 0.22;
+          ringY += (mouseY - ringY) * 0.22;
+          cursorRing.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%)`;
+          requestAnimationFrame(renderRing);
+        }
+        renderRing();
+
+        const glowCards = document.querySelectorAll('.glow-card');
+        glowCards.forEach(card => {
+          card.addEventListener('mousemove', (e) => {
+            const rect = card.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            card.style.setProperty('--mouse-x', `${x}px`);
+            card.style.setProperty('--mouse-y', `${y}px`);
+          }, { passive: true });
+        });
+      }
+
+      // --- 17. NATIVE CYBER-MATRIX HERO CANVAS ---
+      (function initCyberMatrix() {
+        const canvas = document.getElementById('cyber-matrix-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        let width = canvas.width = canvas.offsetWidth;
+        let height = canvas.height = canvas.offsetHeight;
+
+        const glyphs = '0123456789ABCDEF!@#$%^&*<>[]{}|/:;=+~§';
+        const fontSize = 14;
+        let columns = Math.floor(width / fontSize);
+        let drops = [];
+
+        function resetDrops() {
+          columns = Math.floor(width / fontSize);
+          drops = [];
+          for (let i = 0; i < columns; i++) {
+            drops[i] = Math.floor(Math.random() * -30);
+          }
+        }
+        resetDrops();
+
+        window.addEventListener('resize', () => {
+          width = canvas.width = canvas.offsetWidth;
+          height = canvas.height = canvas.offsetHeight;
+          resetDrops();
+        }, { passive: true });
+
+        let pointerHeroX = -1000;
+        let pointerHeroY = -1000;
+
+        canvas.addEventListener('mousemove', (e) => {
+          const rect = canvas.getBoundingClientRect();
+          pointerHeroX = e.clientX - rect.left;
+          pointerHeroY = e.clientY - rect.top;
+        }, { passive: true });
+
+        canvas.addEventListener('mouseleave', () => {
+          pointerHeroX = -1000;
+          pointerHeroY = -1000;
+        }, { passive: true });
+
+        let lastFrameTime = 0;
+        const fps = 28;
+        const frameInterval = 1000 / fps;
+
+        function drawMatrix(timestamp) {
+          if (prefersReducedMotion) {
+            ctx.fillStyle = '#09090b';
+            ctx.fillRect(0, 0, width, height);
+            return;
+          }
+
+          requestAnimationFrame(drawMatrix);
+
+          const delta = timestamp - lastFrameTime;
+          if (delta < frameInterval) return;
+          lastFrameTime = timestamp - (delta % frameInterval);
+
+          ctx.fillStyle = 'rgba(9, 9, 11, 0.16)';
+          ctx.fillRect(0, 0, width, height);
+
+          ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
+
+          for (let i = 0; i < columns; i++) {
+            const char = glyphs.charAt(Math.floor(Math.random() * glyphs.length));
+            const x = i * fontSize;
+            const y = drops[i] * fontSize;
+
+            const dx = x - pointerHeroX;
+            const dy = y - pointerHeroY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 110) {
+              ctx.fillStyle = '#6ee7b7';
+              ctx.shadowColor = '#10b981';
+              ctx.shadowBlur = 12;
+            } else if (drops[i] > 0 && Math.random() > 0.88) {
+              ctx.fillStyle = '#a7f3d0';
+              ctx.shadowColor = '#34d399';
+              ctx.shadowBlur = 6;
+            } else {
+              ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+              ctx.shadowBlur = 0;
+            }
+
+            ctx.fillText(char, x, y);
+
+            if (y > height && Math.random() > 0.975) {
+              drops[i] = 0;
+            }
+            drops[i]++;
+          }
+        }
+
+        requestAnimationFrame(drawMatrix);
+      })();
+
+      // --- INITIALIZATION ---
+      // 1. Auto-load sample data on startup so dashboard is live immediately
+      loadSampleData(true);
+      // 2. Set initial mode visually
+      setRedactionMode('full');
+
+      // ─── ACCENT COLOR ENGINE ──────────────────────────────────────────────
+      (function initAccentEngine() {
+        const root = document.documentElement;
+
+        // ── Preset palette ────────────────────────────────────────────────
+        const PALETTES = [
+          { name: 'Emerald',  h500: '#10b981', h400: '#34d399', h300: '#6ee7b7', h200: '#a7f3d0' },
+          { name: 'Cyan',     h500: '#06b6d4', h400: '#22d3ee', h300: '#67e8f9', h200: '#a5f3fc' },
+          { name: 'Blue',     h500: '#3b82f6', h400: '#60a5fa', h300: '#93c5fd', h200: '#bfdbfe' },
+          { name: 'Violet',   h500: '#8b5cf6', h400: '#a78bfa', h300: '#c4b5fd', h200: '#ddd6fe' },
+          { name: 'Fuchsia',  h500: '#d946ef', h400: '#e879f9', h300: '#f0abfc', h200: '#f5d0fe' },
+          { name: 'Rose',     h500: '#f43f5e', h400: '#fb7185', h300: '#fda4af', h200: '#fecdd3' },
+          { name: 'Amber',    h500: '#f59e0b', h400: '#fbbf24', h300: '#fcd34d', h200: '#fde68a' },
+          { name: 'Lime',     h500: '#84cc16', h400: '#a3e635', h300: '#bef264', h200: '#d9f99d' },
+          { name: 'Teal',     h500: '#14b8a6', h400: '#2dd4bf', h300: '#5eead4', h200: '#99f6e4' },
+          { name: 'Orange',   h500: '#f97316', h400: '#fb923c', h300: '#fdba74', h200: '#fed7aa' },
+          { name: 'White',    h500: '#a1a1aa', h400: '#d4d4d8', h300: '#e4e4e7', h200: '#f4f4f5' },
+          { name: 'Gold',     h500: '#ca8a04', h400: '#eab308', h300: '#facc15', h200: '#fef08a' },
+        ];
+
+        // ── Helpers ───────────────────────────────────────────────────────
+        function hexToRgb(hex) {
+          const r = parseInt(hex.slice(1,3),16);
+          const g = parseInt(hex.slice(3,5),16);
+          const b = parseInt(hex.slice(5,7),16);
+          return [r,g,b];
+        }
+        function scaleHex(hex, factor) {
+          const [r,g,b] = hexToRgb(hex);
+          const f = factor / 100;
+          return `rgb(${Math.round(r*f)},${Math.round(g*f)},${Math.round(b*f)})`;
+        }
+        function brightenHex(hex, pct) {
+          let [r,g,b] = hexToRgb(hex);
+          r = Math.min(255, Math.round(r + (255-r)*pct/100));
+          g = Math.min(255, Math.round(g + (255-g)*pct/100));
+          b = Math.min(255, Math.round(b + (255-b)*pct/100));
+          return `rgb(${r},${g},${b})`;
+        }
+
+        // ── Apply a full accent palette to :root ──────────────────────────
+        function applyAccent(h500, h400, h300, h200, name, intensity) {
+          const iFactor = intensity / 70; // relative to default 70%
+          const [r5,g5,b5] = hexToRgb(h500);
+          const [r4,g4,b4] = hexToRgb(h400);
+          const [r3,g3,b3] = hexToRgb(h300);
+          const [r2,g2,b2] = hexToRgb(h200);
+
+          root.style.setProperty('--accent-500',   h500);
+          root.style.setProperty('--accent-400',   h400);
+          root.style.setProperty('--accent-300',   h300);
+          root.style.setProperty('--accent-200',   h200);
+          root.style.setProperty('--accent-950bg', `rgba(${r5},${g5},${b5},${0.08 * iFactor})`);
+          root.style.setProperty('--accent-glow',  `rgba(${r4},${g4},${b4},${0.30 * iFactor})`);
+          root.style.setProperty('--accent-border',`rgba(${r4},${g4},${b4},${0.50 * iFactor})`);
+
+          // ── Inject dynamic override sheet for Tailwind hardcoded emerald classes ──
+          let dynSheet = document.getElementById('accent-override-sheet');
+          if (!dynSheet) {
+            dynSheet = document.createElement('style');
+            dynSheet.id = 'accent-override-sheet';
+            document.head.appendChild(dynSheet);
+          }
+          const a4 = h400, a5 = h500, a3 = h300;
+          const bg4  = `rgba(${r4},${g4},${b4},${0.3*iFactor})`;
+          const bg5  = `rgba(${r5},${g5},${b5},${0.2*iFactor})`;
+          const bg5b = `rgba(${r5},${g5},${b5},${0.1*iFactor})`;
+          const bd5  = `rgba(${r5},${g5},${b5},${0.5*iFactor})`;
+          const glow = `rgba(${r4},${g4},${b4},${0.4*iFactor})`;
+          dynSheet.textContent = `
+            /* Tailwind emerald → accent override */
+            .text-emerald-400,.text-emerald-300,.text-emerald-500 { color: ${a4} !important; }
+            .text-emerald-200 { color: ${a3} !important; }
+            .bg-emerald-400,.bg-emerald-500 { background-color: ${a5} !important; }
+            .bg-emerald-400\\/50,.bg-emerald-500\\/50 { background-color: ${bg5} !important; }
+            .bg-emerald-400\\/20,.bg-emerald-500\\/20 { background-color: ${bg5b} !important; }
+            .bg-emerald-950\\/40,.bg-emerald-950\\/90 { background-color: ${bg5b} !important; }
+            .border-emerald-400,.border-emerald-500 { border-color: ${a5} !important; }
+            .border-emerald-400\\/40,.border-emerald-500\\/30 { border-color: ${bd5} !important; }
+            .border-emerald-500\\/80 { border-color: rgba(${r5},${g5},${b5},0.8) !important; }
+            .shadow-emerald-400\\/50,.shadow-emerald-500\\/50 { --tw-shadow-color: ${glow}; box-shadow: var(--tw-shadow); }
+            .selection\\:bg-emerald-500\\/30 *::selection { background: ${bg4}; }
+            .selection\\:text-emerald-200 *::selection { color: ${a3}; }
+            #cursor-dot { background-color: ${a4} !important; }
+            #cursor-ring { border-color: ${a4} !important; }
+            #cursor-ring.w-12 { background-color: ${bg5b} !important; }
+            .animate-pulse { --tw-shadow-color: ${glow}; }
+          `;
+
+          // Update intensity-reactive range slider color
+          const iSlider = document.getElementById('accent-intensity');
+          if (iSlider) iSlider.style.accentColor = h400;
+          if (iSlider) iSlider.style.accentColor = h400;
+
+          // Update panel live preview swatch + preview dot in navbar
+          const panelSwatch = document.getElementById('panel-preview-swatch');
+          if (panelSwatch) {
+            panelSwatch.style.background = h400;
+            panelSwatch.style.boxShadow = `0 0 8px rgba(${r4},${g4},${b4},0.5)`;
+          }
+          const dot = document.getElementById('accent-preview-dot');
+          if (dot) dot.style.backgroundColor = h400;
+
+          // Update hex display
+          const hexDisp = document.getElementById('hex-display');
+          if (hexDisp) hexDisp.textContent = h500;
+
+          const colorInput = document.getElementById('custom-accent-input');
+          if (colorInput) colorInput.value = h500;
+
+          // Update active label
+          const lbl = document.getElementById('active-accent-label');
+          if (lbl) { lbl.textContent = name; lbl.style.color = h400; }
+
+          // Also theme the matrix rain accent
+          root.style.setProperty('--matrix-color', h400);
+
+          // Persist to localStorage
+          try {
+            localStorage.setItem('bl_accent', JSON.stringify({ h500, h400, h300, h200, name, intensity }));
+          } catch(_) {}
+        }
+
+        // ── Build preset swatch buttons ───────────────────────────────────
+        const swatchContainer = document.getElementById('accent-swatches');
+        let currentActiveName = 'Emerald';
+
+        function updateActiveSwatches() {
+          document.querySelectorAll('.color-swatch').forEach(sw => {
+            if (sw.dataset.name === currentActiveName) {
+              sw.classList.add('active');
+            } else {
+              sw.classList.remove('active');
+            }
+          });
+        }
+
+        if (swatchContainer) {
+          PALETTES.forEach(p => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'color-swatch';
+            btn.style.backgroundColor = p.h400;
+            btn.dataset.name = p.name;
+            btn.title = p.name;
+            btn.setAttribute('aria-label', `Set ${p.name} accent`);
+            btn.addEventListener('click', () => {
+              currentActiveName = p.name;
+              const intensity = parseInt(document.getElementById('accent-intensity')?.value || 70);
+              applyAccent(p.h500, p.h400, p.h300, p.h200, p.name, intensity);
+              updateActiveSwatches();
+              showToast(`Accent: ${p.name}`);
+            });
+            swatchContainer.appendChild(btn);
+          });
+        }
+
+        // ── Custom color input ────────────────────────────────────────────
+        const customInput = document.getElementById('custom-accent-input');
+        const hexDisp = document.getElementById('hex-display');
+
+        function deriveShades(h500) {
+          const [r,g,b] = hexToRgb(h500);
+          const h400 = `rgb(${Math.min(255,Math.round(r+30))},${Math.min(255,Math.round(g+30))},${Math.min(255,Math.round(b+30))})`;
+          const h300 = `rgb(${Math.min(255,Math.round(r+70))},${Math.min(255,Math.round(g+70))},${Math.min(255,Math.round(b+70))})`;
+          const h200 = `rgb(${Math.min(255,Math.round(r+110))},${Math.min(255,Math.round(g+110))},${Math.min(255,Math.round(b+110))})`;
+          return { h400, h300, h200 };
+        }
+
+        if (customInput) {
+          customInput.addEventListener('input', () => {
+            const hex = customInput.value;
+            const shades = deriveShades(hex);
+            const intensity = parseInt(document.getElementById('accent-intensity')?.value || 70);
+            currentActiveName = 'Custom';
+            applyAccent(hex, shades.h400, shades.h300, shades.h200, 'Custom', intensity);
+            updateActiveSwatches();
+          });
+        }
+
+        // Copy hex on click
+        if (hexDisp) {
+          hexDisp.addEventListener('click', () => {
+            const val = hexDisp.textContent.trim();
+            try { navigator.clipboard.writeText(val); showToast(`Copied ${val}`); } catch(_) {}
+          });
+        }
+
+        // ── Intensity slider ──────────────────────────────────────────────
+        const intensitySlider = document.getElementById('accent-intensity');
+        const intensityLabel  = document.getElementById('intensity-label');
+        if (intensitySlider) {
+          intensitySlider.addEventListener('input', () => {
+            const val = parseInt(intensitySlider.value);
+            if (intensityLabel) intensityLabel.textContent = val + '%';
+            // Re-apply with new intensity
+            const hex = customInput?.value || '#10b981';
+            const matched = PALETTES.find(p => p.name === currentActiveName);
+            if (matched) {
+              applyAccent(matched.h500, matched.h400, matched.h300, matched.h200, matched.name, val);
+            } else {
+              const shades = deriveShades(hex);
+              applyAccent(hex, shades.h400, shades.h300, shades.h200, 'Custom', val);
+            }
+          });
+        }
+
+        // ── Panel open/close ──────────────────────────────────────────────
+        const panel      = document.getElementById('accent-panel');
+        const btnOpen    = document.getElementById('btn-accent-picker');
+        const btnClose   = document.getElementById('btn-close-accent');
+
+        function togglePanel(force) {
+          const isOpen = panel.classList.contains('open');
+          const shouldOpen = force !== undefined ? force : !isOpen;
+          panel.classList.toggle('open', shouldOpen);
+          if (btnOpen) btnOpen.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        }
+
+        if (btnOpen) btnOpen.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(); });
+        if (btnClose) btnClose.addEventListener('click', () => togglePanel(false));
+        document.addEventListener('click', (e) => {
+          if (panel && panel.classList.contains('open') && !panel.contains(e.target) && e.target !== btnOpen && !btnOpen?.contains(e.target)) {
+            togglePanel(false);
+          }
+        });
+
+        // ── Restore saved preference ──────────────────────────────────────
+        try {
+          const saved = localStorage.getItem('bl_accent');
+          if (saved) {
+            const { h500, h400, h300, h200, name, intensity } = JSON.parse(saved);
+            currentActiveName = name || 'Emerald';
+            const iVal = intensity || 70;
+            if (intensitySlider) intensitySlider.value = iVal;
+            if (intensityLabel)  intensityLabel.textContent = iVal + '%';
+            applyAccent(h500, h400, h300, h200, name, iVal);
+            updateActiveSwatches();
+          } else {
+            updateActiveSwatches(); // mark Emerald active
+          }
+        } catch(_) {
+          updateActiveSwatches();
+        }
+
+      })();
+      // ─── END ACCENT COLOR ENGINE ──────────────────────────────────────────
+
+    })();
+  </script>
+
+  <!-- ═══ ACCENT COLOR PICKER PANEL ═══════════════════════════════════════ -->
+  <div id="accent-panel" role="dialog" aria-label="Accent color picker">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full" id="panel-preview-swatch" style="background:var(--accent-400); box-shadow:0 0 8px var(--accent-glow);"></span>
+        <span class="text-sm font-mono font-semibold text-white">Accent Color</span>
+      </div>
+      <button id="btn-close-accent" type="button" class="text-zinc-500 hover:text-white transition-colors p-1 rounded" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Preset Swatches -->
+    <p class="text-[11px] font-mono text-zinc-500 uppercase tracking-widest mb-2">Presets</p>
+    <div id="accent-swatches" class="flex flex-wrap gap-2 mb-4">
+      <!-- filled by JS -->
+    </div>
+
+    <!-- Custom Color -->
+    <p class="text-[11px] font-mono text-zinc-500 uppercase tracking-widest mb-2">Custom</p>
+    <div class="flex items-center gap-3 mb-4">
+      <input id="custom-accent-input" type="color" value="#10b981" title="Pick any color" />
+      <div class="flex-1">
+        <div id="hex-display" class="text-xs font-mono text-zinc-200 bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1.5 cursor-pointer hover:border-zinc-500 transition-colors" title="Click to copy hex">#10b981</div>
+      </div>
+    </div>
+
+    <!-- Intensity Slider -->
+    <p class="text-[11px] font-mono text-zinc-500 uppercase tracking-widest mb-2">Intensity</p>
+    <div class="flex items-center gap-3 mb-4">
+      <input id="accent-intensity" type="range" min="30" max="100" value="70" class="flex-1 h-1.5 rounded-full accent-current cursor-pointer" style="accent-color: var(--accent-400);" />
+      <span id="intensity-label" class="text-xs font-mono text-zinc-400 w-8 text-right">70%</span>
+    </div>
+
+    <!-- Active label -->
+    <div class="mt-1 pt-3 border-t border-zinc-800 flex items-center justify-between">
+      <span class="text-[11px] font-mono text-zinc-500">Active</span>
+      <span id="active-accent-label" class="text-xs font-mono font-semibold" style="color: var(--accent-400);">Emerald</span>
+    </div>
+  </div>
+
+</body>
+</html>

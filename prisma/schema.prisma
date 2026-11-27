@@ -1,0 +1,134 @@
+// Prisma Schema for Blackline Enterprise PII Sanitization Platform
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  SECURITY_ADMIN
+  COMPLIANCE_AUDITOR
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum RedactionMode {
+  FULL_MASK
+  PARTIAL_MASK
+  PSEUDONYMIZE
+}
+
+enum EntityType {
+  CREDIT_CARD
+  AADHAAR
+  PAN
+  EMAIL
+  IP_ADDRESS
+  PHONE
+}
+
+// 1. User & Authentication Entity
+model User {
+  id           String            @id @default(uuid())
+  email        String            @unique
+  passwordHash String
+  name         String?
+  role         Role              @default(USER)
+  apiKey       String            @unique @default(uuid())
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  jobs         SanitizationJob[]
+  auditLogs    AuditLog[]
+
+  @@index([apiKey])
+}
+
+// 2. Sanitization Job (Zero-Leak Policy: Raw payload is never permanently saved)
+model SanitizationJob {
+  id               String             @id @default(uuid())
+  userId           String?
+  user             User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fileName         String?
+  fileType         String?            // .txt, .csv, .json, .log
+  fileSizeBytes    Int                @default(0)
+  charCount        Int                @default(0)
+  lineCount        Int                @default(0)
+  redactionMode    RedactionMode      @default(FULL_MASK)
+  status           JobStatus          @default(PENDING)
+  executionMs      Int                @default(0)
+  inputChecksum    String             // SHA-256 hash of raw input for integrity verification
+  outputChecksum   String?            // SHA-256 hash of sanitized output
+  sanitizedOutput  String?            @db.Text // Redacted payload
+  createdAt        DateTime           @default(now())
+  completedAt      DateTime?
+
+  metric           JobMetric?
+  pseudonyms       PseudonymToken[]
+  auditLogs        AuditLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// 3. Telemetry & Analytics Metric
+model JobMetric {
+  id               String          @id @default(uuid())
+  jobId            String          @unique
+  job              SanitizationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  creditCardCount  Int             @default(0)
+  aadhaarCount     Int             @default(0)
+  panCount         Int             @default(0)
+  emailCount       Int             @default(0)
+  ipCount          Int             @default(0)
+  phoneCount       Int             @default(0)
+  totalRedacted    Int             @default(0)
+  blockedLuhnCount Int             @default(0) // Invalid 16-digit cards that failed mod-10
+  createdAt        DateTime        @default(now())
+
+  @@index([jobId])
+}
+
+// 4. Pseudonym Lookup Registry (Deterministic Mapping per Job / Session)
+model PseudonymToken {
+  id             String          @id @default(uuid())
+  jobId          String
+  job            SanitizationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  entityType     EntityType
+  keyHash        String          // Salted HMAC SHA-256 hash of normalized entity
+  pseudonymToken String          // e.g. EMAIL_01, CC_01, PHONE_01
+  createdAt      DateTime        @default(now())
+
+  @@unique([jobId, entityType, keyHash])
+  @@index([jobId])
+}
+
+// 5. Immutable Audit Log (Compliance & Egress Tracking)
+model AuditLog {
+  id         String           @id @default(uuid())
+  jobId      String?
+  job        SanitizationJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String           // e.g. JOB_SANITIZED, FILE_EXPORTED, AUDIT_DOWNLOADED
+  ipAddress  String?
+  userAgent  String?
+  status     String           @default("SUCCESS")
+  details    Json?            // Contextual execution metadata
+  createdAt  DateTime         @default(now())
+
+  @@index([jobId])
+  @@index([userId])
+  @@index([createdAt])
+}
